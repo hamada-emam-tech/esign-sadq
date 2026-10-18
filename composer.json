@@ -1,0 +1,29 @@
+{
+    "name": "hamada-emam-tech/esign-sadq",
+    "description": "SADQ (sadq.sa) driver for hamada-emam-tech/esign: Saudi e-signature envelopes with Nafath identity.",
+    "keywords": ["esign", "e-signature", "sadq", "saudi", "nafath"],
+    "license": "MIT",
+    "type": "library",
+    "require": {
+        "php": "^8.2",
+        "ext-json": "*",
+        "hamada-emam-tech/esign": "^0.2",
+        "psr/http-client": "^1.0",
+        "psr/http-factory": "^1.0",
+        "psr/simple-cache": "^1.0 || ^2.0 || ^3.0"
+    },
+    "suggest": {
+        "guzzlehttp/guzzle": "A PSR-18 HTTP client, picked up automatically",
+        "symfony/http-client": "A PSR-18 HTTP client, picked up automatically"
+    },
+    "autoload": {
+        "psr-4": { "HamadaEmamTech\\Esign\\Sadq\\": "src/" }
+    },
+    "autoload-dev": {
+        "psr-4": { "HamadaEmamTech\\Esign\\Sadq\\Tests\\": "tests/" }
+    },
+    "extra": {
+        "esign": { "providers": { "sadq": "HamadaEmamTech\\Esign\\Sadq\\SadqFactory" } }
+    },
+    "minimum-stability": "stable"
+}
