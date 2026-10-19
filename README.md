@@ -65,18 +65,16 @@ $sent->signingUrls;     // ['ahmed@example.sa' => 'https://…/sign/…', …]. 
 
 ```php
 // POST /webhooks/sadq
-try {
-    $event = $esign->parseWebhook($request->headers->all(), $request->getContent(), 'sadq');
-    dispatch(new SyncSadqEnvelope($event->envelopeId));    // do the rest in a queue
-} catch (InvalidWebhook $e) {
-    logger()->warning('Bad SADQ webhook', ['error' => $e->getMessage()]);
+$result = $esign->handleWebhook($request->headers->all(), $request->getContent(), 'sadq');
+if ($result->isValid()) {
+    dispatch(new SyncEnvelope((string) $result->ref()));    // do the rest in a queue
 }
-return response('', 200);   // always 200, or SADQ retries
+return response($result->response->body, $result->response->status);   // always 200
 
 // In the job:
-$status = $esign->provider('sadq')->status($envelopeId);
+$status = $esign->status($ref);                // "sadq:…", stored from $sent->ref()
 if ($status === EnvelopeStatus::Signed) {
-    $pdf = $esign->provider('sadq')->download($envelopeId);
+    $pdf = $esign->download($ref);
 }
 ```
 
@@ -101,19 +99,29 @@ SADQ's webhook body is `{"RequestId": "<envelope id>", "Status": 1|2|3}`. SADQ d
 
 You can register a webhook with a `HeaderToken` (`registerWebhook($url, $token)`). SADQ's delivery log shows those deliveries succeeding, but it doesn't show whether the token is forwarded, or in which header. Once you've confirmed it on a real delivery, set `'webhook_verification' => 'token'` and `webhook_token` (plus `webhook_header` to check one header only). In that mode the driver fails closed.
 
-## SADQ-only operations
+## Capabilities and optional features
+
+| | SADQ |
+|---|---|
+| Identity methods | `email`, `nafath` |
+| Documents per envelope | 1 |
+| Signing order, field placement, signing links | yes |
+| `remind()`, `extendDeadline()`, `details()`, webhook management | yes |
+| Cancel | asynchronous (a few minutes) |
+
+The core checks every envelope against this before sending, and the optional features go through the same calls as for every provider:
 
 ```php
-/** @var \HamadaEmamTech\Esign\Sadq\SadqProvider $sadq */
-$sadq = $esign->provider('sadq');
-
-$sadq->remind($envelopeId, 'sara@example.sa');               // email the link again
-$sadq->extend($envelopeId, new DateTimeImmutable('+14 days'));
-$id = $sadq->registerWebhook('https://app.example.sa/webhooks/sadq', $token);   // never the default unless you ask
-$sadq->webhooks();
-$sadq->deleteWebhook($id);
-$sadq->resendWebhook($envelopeId);                            // ask SADQ to call your webhook again
+$esign->remind($ref, 'sara@example.sa');                       // re-sends the link without duplicating the signer
+$esign->extendDeadline($ref, new DateTimeImmutable('+14 days'));
+$esign->details($ref)->pending();                              // who hasn't signed yet
+$id = $esign->registerWebhook('https://app.example.sa/webhooks/sadq', provider: 'sadq');
+$esign->webhooks('sadq');
+$esign->deleteWebhook($id, 'sadq');
+$esign->cancel($ref);
 ```
+
+SADQ only: `$esign->provider('sadq')->resendWebhook($envelopeId)` asks SADQ to call your webhook again.
 
 ## What this driver handles for you
 

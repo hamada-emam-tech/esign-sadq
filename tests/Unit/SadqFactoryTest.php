@@ -9,11 +9,14 @@ use HamadaEmamTech\Esign\Exceptions\EsignException;
 use HamadaEmamTech\Esign\Sadq\SadqCredentials;
 use HamadaEmamTech\Esign\Sadq\SadqFactory;
 use HamadaEmamTech\Esign\Sadq\SadqProvider;
+use HamadaEmamTech\Esign\Testing\AssertsProviderConformance;
 use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
 
 final class SadqFactoryTest extends TestCase
 {
+    use AssertsProviderConformance;
+
     /** @return array<string, string> */
     private function config(): array
     {
@@ -24,6 +27,12 @@ final class SadqFactoryTest extends TestCase
     public function it_builds_the_provider_and_finds_guzzle_on_its_own(): void
     {
         self::assertInstanceOf(SadqProvider::class, (new SadqFactory())->create($this->config()));
+    }
+
+    #[Test]
+    public function it_conforms_to_the_shared_provider_contract(): void
+    {
+        $this->assertProviderConformance(new SadqFactory(), $this->config(), 'sadq', __DIR__ . '/../../composer.json');
     }
 
     #[Test]

@@ -6,7 +6,20 @@ namespace HamadaEmamTech\Esign\Sadq;
 
 use DateTimeImmutable;
 use DateTimeInterface;
+use HamadaEmamTech\Esign\Capabilities\Capabilities;
+use HamadaEmamTech\Esign\Capabilities\Feature;
+use HamadaEmamTech\Esign\Contracts\Features\ExtendsExpiry;
+use HamadaEmamTech\Esign\Contracts\Features\ManagesWebhooks;
+use HamadaEmamTech\Esign\Contracts\Features\ReportsSigners;
+use HamadaEmamTech\Esign\Contracts\Features\SendsReminders;
+use HamadaEmamTech\Esign\Contracts\HasCapabilities;
+use HamadaEmamTech\Esign\Contracts\Features\RecognizesWebhooks;
 use HamadaEmamTech\Esign\Contracts\SignatureProvider;
+use HamadaEmamTech\Esign\Support\Headers;
+use HamadaEmamTech\Esign\Envelope\EnvelopeDetails;
+use HamadaEmamTech\Esign\Envelope\EnvelopeRef;
+use HamadaEmamTech\Esign\Envelope\SignerState;
+use HamadaEmamTech\Esign\Envelope\SignerStatus;
 use HamadaEmamTech\Esign\Envelope\Envelope;
 use HamadaEmamTech\Esign\Envelope\EnvelopeStatus;
 use HamadaEmamTech\Esign\Envelope\IdentityMethod;
@@ -37,7 +50,7 @@ use Throwable;
  * - Adding a second file to an envelope fails on the sandbox, so one document per envelope.
  * - Sending invitations again duplicates the signer. Use remind() to nudge someone.
  */
-final class SadqProvider implements SignatureProvider
+final class SadqProvider implements SignatureProvider, HasCapabilities, SendsReminders, ExtendsExpiry, ManagesWebhooks, ReportsSigners, RecognizesWebhooks
 {
     private const AUTH_EMAIL = 0;
     private const AUTH_NAFATH = 7;
@@ -51,6 +64,37 @@ final class SadqProvider implements SignatureProvider
     public function name(): string
     {
         return 'sadq';
+    }
+
+    public function capabilities(): Capabilities
+    {
+        return new Capabilities(
+            identityMethods: [IdentityMethod::Email, IdentityMethod::Nafath],
+            features: [
+                Feature::SigningOrder, Feature::FieldPlacement, Feature::SigningUrls, Feature::Reminders,
+                Feature::ExpiryExtension, Feature::WebhookManagement, Feature::SignerDetails,
+            ],
+            maxDocuments: 1,          // adding files to an envelope fails on SADQ
+            asyncCancel: true,        // "Voided" shows a few minutes after cancel()
+        );
+    }
+
+    public function details(string $envelopeId): EnvelopeDetails
+    {
+        $data = $this->current($envelopeId);
+        $signers = array_map(fn (array $s) => new SignerState(
+            (string) ($s['email'] ?? ''),
+            trim((string) ($s['fullName'] ?? '')),
+            match (strtoupper((string) ($s['status'] ?? ''))) {
+                'SIGNED' => SignerStatus::Signed,
+                'DECLINED', 'REJECTED' => SignerStatus::Declined,
+                default => SignerStatus::Pending,
+            },
+            is_string($s['signingUrl'] ?? null) ? $s['signingUrl'] : null,
+            isset($s['signOrder']) ? (int) $s['signOrder'] : null,
+        ), $this->invitedSignatories($data));
+
+        return new EnvelopeDetails(new EnvelopeRef('sadq', $envelopeId), $this->map($data), $signers);
     }
 
     public function send(Envelope $envelope): SentEnvelope
@@ -138,6 +182,16 @@ final class SadqProvider implements SignatureProvider
         $this->api->post('/api/v1/envelopes/' . rawurlencode($envelopeId) . '/cancel', ['envelopId' => $envelopeId]);
     }
 
+    /** SADQ posts {"RequestId": "...", "Status": n} with no signature header of its own. */
+    public function recognizesWebhook(array $headers, string $rawBody): bool
+    {
+        $payload = json_decode($rawBody, true);
+
+        return is_array($payload)
+            && array_intersect(['RequestId', 'requestId', 'EnvelopeId', 'envelopeId'], array_keys($payload)) !== []
+            && (array_key_exists('Status', $payload) || array_key_exists('status', $payload));
+    }
+
     public function parseWebhook(array $headers, string $rawBody): WebhookEvent
     {
         if ($this->options->verifyWebhooks) {
@@ -166,9 +220,9 @@ final class SadqProvider implements SignatureProvider
     // ---- SADQ-only operations ----------------------------------------------------
 
     /** Email the signing link to a signer again. Safe: unlike re-inviting, it does not duplicate the signer. */
-    public function remind(string $envelopeId, string $email): void
+    public function remind(string $envelopeId, string $signerEmail): void
     {
-        $this->api->post('/api/v1/invitations/reminders/send', ['requestId' => $envelopeId, 'envelopId' => $envelopeId, 'destinationEmail' => $email]);
+        $this->api->post('/api/v1/invitations/reminders/send', ['requestId' => $envelopeId, 'envelopId' => $envelopeId, 'destinationEmail' => $signerEmail]);
     }
 
     /** Move every open invitation's deadline. */
@@ -178,12 +232,12 @@ final class SadqProvider implements SignatureProvider
     }
 
     /**
-     * Register a webhook URL. SADQ sends $token in a header on every call.
+     * Register a webhook URL, with an optional HeaderToken ($secret).
      * Keep $isDefault false on a shared account, and pass the returned ID as webhook_id.
      */
-    public function registerWebhook(string $url, #[\SensitiveParameter] string $token, bool $isDefault = false): string
+    public function registerWebhook(string $url, #[\SensitiveParameter] ?string $secret = null, bool $isDefault = false): string
     {
-        $data = $this->api->post('/api/v1/webhooks', ['webhookUrl' => $url, 'isDefault' => $isDefault, 'HeaderToken' => $token]);
+        $data = $this->api->post('/api/v1/webhooks', ['webhookUrl' => $url, 'isDefault' => $isDefault, 'HeaderToken' => $secret ?? '']);
         $id = is_array($data) ? ($data['id'] ?? null) : null;
 
         return is_string($id) ? $id : throw new ProviderError('sadq', 'Webhook was registered without an ID.');

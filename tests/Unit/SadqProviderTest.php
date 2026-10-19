@@ -10,6 +10,7 @@ use HamadaEmamTech\Esign\Envelope\EnvelopeStatus;
 use HamadaEmamTech\Esign\Envelope\IdentityMethod;
 use HamadaEmamTech\Esign\Envelope\SignatureField;
 use HamadaEmamTech\Esign\Envelope\Signer;
+use HamadaEmamTech\Esign\Envelope\SignerStatus;
 use HamadaEmamTech\Esign\Exceptions\EsignException;
 use HamadaEmamTech\Esign\Exceptions\InvalidWebhook;
 use HamadaEmamTech\Esign\Exceptions\ProviderError;
@@ -148,6 +149,23 @@ final class SadqProviderTest extends TestCase
 
         $this->sadq->signAll($id);
         self::assertSame(EnvelopeStatus::Signed, $provider->status($id));
+    }
+
+    #[Test]
+    public function details_lists_only_the_invited_signers_with_their_status_and_links(): void
+    {
+        $provider = $this->sadq->provider();
+        $id = $provider->send($this->envelope())->envelopeId;
+        $this->sadq->sign($id, 'ahmed@example.sa');
+
+        $details = $provider->details($id);
+
+        self::assertSame('sadq:' . $id, (string) $details->ref);
+        self::assertSame(EnvelopeStatus::PartiallySigned, $details->status);
+        self::assertSame(['ahmed@example.sa', 'sara@example.sa'], array_map(fn ($s) => $s->email, $details->signers));   // no owner
+        self::assertSame([SignerStatus::Signed, SignerStatus::Pending], array_map(fn ($s) => $s->status, $details->signers));
+        self::assertSame([1, 2], array_map(fn ($s) => $s->order, $details->signers));
+        self::assertSame('sara@example.sa', $details->pending()[0]->email);
     }
 
     #[Test]
